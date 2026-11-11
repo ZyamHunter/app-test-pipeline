@@ -23,7 +23,11 @@ USER_AGENT = "gh-bridge/0.1 (+https://github.com)"
 ACCEPT = "application/vnd.github+json"
 API_VERSION = "2022-11-28"
 
+#: ``event_type`` sent in the dispatch call.
 DISPATCH_EVENT = "bridge-cmd"
+
+#: Value of the ``event`` field in the Actions API (not the same thing!).
+REPOSITORY_EVENT = "repository_dispatch"
 
 
 class GitHubError(RuntimeError):
@@ -108,7 +112,8 @@ class GitHubClient:
     # ------------------------------------------------------------------ http
     def _headers(self, raw: bool = False) -> Dict[str, str]:
         headers = {
-            "Accept": "application/octet-stream" if raw else ACCEPT,
+            # The artifact/log endpoints reject 'application/octet-stream'.
+            "Accept": "*/*" if raw else ACCEPT,
             "X-GitHub-Api-Version": API_VERSION,
             "User-Agent": USER_AGENT,
         }
@@ -202,7 +207,7 @@ class GitHubClient:
         self,
         nonce: str,
         *,
-        event: Optional[str] = DISPATCH_EVENT,
+        event: Optional[str] = REPOSITORY_EVENT,
         since: Optional[float] = None,
         timeout: float = 120,
         interval: float = 3,
@@ -210,13 +215,21 @@ class GitHubClient:
     ) -> Dict[str, Any]:
         """Poll until the run carrying ``nonce`` in its title shows up."""
         deadline = time.monotonic() + timeout
+        started = time.monotonic()
         while True:
-            for run in self.list_runs(event=event, per_page=50):
-                haystack = " ".join(
-                    str(run.get(key) or "") for key in ("display_title", "name", "head_branch")
-                )
-                if nonce in haystack:
-                    return run
+            events: List[Optional[str]] = [event]
+            # If the event filter finds nothing, retry unfiltered: some runs
+            # are reported under a different event name than expected.
+            if event and time.monotonic() - started > 15:
+                events.append(None)
+            for current_event in events:
+                for run in self.list_runs(event=current_event, per_page=50):
+                    haystack = " ".join(
+                        str(run.get(key) or "")
+                        for key in ("display_title", "name", "head_branch")
+                    )
+                    if nonce in haystack:
+                        return run
             if time.monotonic() >= deadline:
                 raise GitHubError(
                     f"no run found for nonce {nonce} after {timeout:.0f}s "

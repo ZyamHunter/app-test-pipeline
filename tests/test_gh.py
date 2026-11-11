@@ -37,6 +37,21 @@ class ErrorMessageTest(unittest.TestCase):
         self.assertIn("scope", gh._friendly_http_error(403, "https://api/x", ""))
 
 
+class HeadersTest(unittest.TestCase):
+    def test_json_accept_header(self) -> None:
+        client = gh.GitHubClient("a/b", token="x")
+        self.assertEqual(client._headers()["Accept"], gh.ACCEPT)
+
+    def test_raw_accept_header_is_not_octet_stream(self) -> None:
+        # GitHub answers 415 for artifact/log downloads with octet-stream.
+        client = gh.GitHubClient("a/b", token="x")
+        self.assertEqual(client._headers(raw=True)["Accept"], "*/*")
+
+    def test_auth_header_is_bearer(self) -> None:
+        client = gh.GitHubClient("a/b", token="tok")
+        self.assertEqual(client._headers()["Authorization"], "Bearer tok")
+
+
 class SummarizeRunTest(unittest.TestCase):
     def test_in_progress(self) -> None:
         self.assertEqual(gh.summarize_run({"status": "in_progress"}), "in_progress")
