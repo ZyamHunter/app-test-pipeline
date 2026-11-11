@@ -48,8 +48,10 @@ def load_config() -> Dict[str, Any]:
     if not path.exists():
         return {}
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        # utf-8-sig: tolerate the BOM that Windows PowerShell adds.
+        return json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError) as exc:
+        _print_err(f"warning: ignoring invalid config at {path}: {exc}")
         return {}
 
 
@@ -68,7 +70,7 @@ def load_key(explicit_file: Optional[str] = None) -> str:
             continue
         path = Path(candidate).expanduser()
         if path.exists():
-            value = path.read_text(encoding="utf-8").strip()
+            value = path.read_text(encoding="utf-8-sig").strip()
             if value:
                 return value
     raise SystemExit(

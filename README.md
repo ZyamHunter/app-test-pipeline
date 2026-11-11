@@ -38,7 +38,7 @@ sua máquina) e a **sessão** (um link público temporário no runner).
 | `bridge/server.py` | Receptor local do callback assinado |
 | `bridge/session.py` | Servidor de sessão no runner + cliente |
 | `bridge/tunnel.py` | ngrok / cloudflared |
-| `tests/` | 54 testes (unitários + integração local de HTTP) |
+| `tests/` | 60 testes (unitários + integração local de HTTP) |
 
 ---
 
@@ -338,7 +338,7 @@ imprimir fica público. Ligue apenas sabendo disso.
 python -m unittest discover -s tests -t . -v
 ```
 
-54 testes cobrindo assinatura, payload, execução, redação, truncamento,
+60 testes cobrindo assinatura, payload, execução, redação, truncamento,
 allowlist, cliente REST, callback HTTP e sessão HTTP (tudo local, sem rede).
 
 Simulação do que o runner faz:
