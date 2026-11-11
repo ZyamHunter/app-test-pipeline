@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# gh-bridge runtime
+.bridge/
+*.log
+
+# local secrets - never commit
+.env
+.env.*
+*.key
+key
+config.json

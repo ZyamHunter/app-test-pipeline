@@ -1,0 +1,106 @@
+name: bridge
+
+# The nonce makes every run easy to find from the local CLI (and keeps two
+# parallel dispatches apart).
+run-name: "bridge · ${{ github.event.client_payload.nonce || inputs.nonce || github.run_id }}"
+
+on:
+  # Called by 'gh-bridge run' over the GitHub API (needs a token with 'repo').
+  repository_dispatch:
+    types: [bridge-cmd]
+  # Manual path from the Actions UI / 'gh workflow run' (write access required).
+  workflow_dispatch:
+    inputs:
+      cmd:
+        description: "Command to run on the runner"
+        required: true
+        type: string
+      nonce:
+        description: "Correlation id (optional)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bridge-${{ github.event.client_payload.nonce || inputs.nonce || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  bridge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # --------------------------------------------------------------------
+      # 1. Authenticate the request.
+      #    The key itself never travels: only a 5-minute HMAC signature does.
+      # --------------------------------------------------------------------
+      - name: Verify signed request
+        if: github.event_name == 'repository_dispatch'
+        env:
+          BRIDGE_KEY: ${{ secrets.BRIDGE_KEY }}
+          BRIDGE_VERSION: ${{ github.event.client_payload.v }}
+          BRIDGE_TS: ${{ github.event.client_payload.ts }}
+          BRIDGE_NONCE: ${{ github.event.client_payload.nonce }}
+          BRIDGE_CMD_B64: ${{ github.event.client_payload.cmd_b64 }}
+          BRIDGE_CALLBACK: ${{ github.event.client_payload.callback }}
+          BRIDGE_SIG: ${{ github.event.client_payload.sig }}
+        run: python -m bridge verify --out .bridge/request.json
+
+      # The UI path already requires write access, so it is trusted.
+      - name: Prepare manual request
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          BRIDGE_CMD: ${{ inputs.cmd }}
+          BRIDGE_NONCE: ${{ inputs.nonce }}
+        run: python -m bridge manual --out .bridge/request.json
+
+      # --------------------------------------------------------------------
+      # 2. Run it. Output is written to the artifact, not to the (public)
+      #    job log, unless BRIDGE_ECHO_OUTPUT=true is set as a repo variable.
+      # --------------------------------------------------------------------
+      - name: Execute
+        id: exec
+        env:
+          BRIDGE_KEY: ${{ secrets.BRIDGE_KEY }}
+          BRIDGE_TIMEOUT: ${{ vars.BRIDGE_TIMEOUT || '600' }}
+          BRIDGE_MAX_OUTPUT: ${{ vars.BRIDGE_MAX_OUTPUT || '524288' }}
+          BRIDGE_ALLOWLIST: ${{ vars.BRIDGE_ALLOWLIST }}
+          BRIDGE_ECHO_OUTPUT: ${{ vars.BRIDGE_ECHO_OUTPUT || 'false' }}
+          BRIDGE_REDACT: ${{ vars.BRIDGE_REDACT }}
+        run: python -m bridge execute --request .bridge/request.json --out .bridge/result.json
+
+      # --------------------------------------------------------------------
+      # 3. Publish the result: artifact for the CLI, optional signed callback,
+      #    metadata-only job summary.
+      # --------------------------------------------------------------------
+      - name: Upload result artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bridge-result-${{ github.event.client_payload.nonce || inputs.nonce }}
+          path: .bridge/result.json
+          if-no-files-found: warn
+          retention-days: 1
+
+      - name: Deliver signed callback
+        if: always()
+        env:
+          BRIDGE_KEY: ${{ secrets.BRIDGE_KEY }}
+        run: python -m bridge notify --request .bridge/request.json --result .bridge/result.json
+
+      - name: Job summary
+        if: always()
+        run: python -m bridge summary --request .bridge/request.json --result .bridge/result.json >> "$GITHUB_STEP_SUMMARY"

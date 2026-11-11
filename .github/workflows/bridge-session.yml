@@ -1,0 +1,86 @@
+name: bridge session
+
+run-name: "bridge session · ${{ inputs.nonce }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      nonce:
+        description: "Correlation id (used to publish the tunnel URL)"
+        required: true
+        type: string
+      ttl:
+        description: "How many seconds the session stays open"
+        required: false
+        default: "600"
+        type: string
+      tunnel:
+        description: "Tunnel provider"
+        required: false
+        default: ngrok
+        type: choice
+        options: [ngrok, cloudflared]
+
+permissions:
+  contents: read
+
+jobs:
+  session:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The server writes its public URL to .bridge/session.json as soon as the
+      # tunnel is up, then keeps serving in the background while we upload the
+      # URL as an artifact.  The local CLI polls that artifact.
+      - name: Start session
+        env:
+          BRIDGE_KEY: ${{ secrets.BRIDGE_KEY }}
+          NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
+          BRIDGE_NONCE: ${{ inputs.nonce }}
+          BRIDGE_TIMEOUT: ${{ vars.BRIDGE_TIMEOUT || '300' }}
+          BRIDGE_ALLOWLIST: ${{ vars.BRIDGE_ALLOWLIST }}
+        run: |
+          set -euo pipefail
+          mkdir -p .bridge
+          nohup python -m bridge session-serve \
+            --ttl "${{ inputs.ttl }}" \
+            --tunnel "${{ inputs.tunnel }}" \
+            --url-file .bridge/session.json \
+            > .bridge/session.log 2>&1 &
+          echo $! > .bridge/session.pid
+          for _ in $(seq 1 90); do
+            if [ -s .bridge/session.json ]; then break; fi
+            sleep 1
+          done
+          if [ ! -s .bridge/session.json ]; then
+            echo "session did not start:"
+            cat .bridge/session.log
+            exit 1
+          fi
+          cat .bridge/session.json
+
+      - name: Publish session URL
+        uses: actions/upload-artifact@v4
+        with:
+          name: session-url-${{ inputs.nonce }}
+          path: .bridge/session.json
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Keep the session alive
+        run: |
+          set -euo pipefail
+          pid=$(cat .bridge/session.pid)
+          while kill -0 "$pid" 2>/dev/null; do sleep 5; done
+          cat .bridge/session.log
